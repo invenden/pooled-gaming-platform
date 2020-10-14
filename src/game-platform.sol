@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0
-pragma solidity ^0.7.0;
+pragma solidity 0.5.12;
 
 interface TRC20 {
     function totalSupply() external view returns (uint);
@@ -40,7 +40,7 @@ contract PooledGamePlatform {
     uint constant WAITING_PERIOD = SECONDS_PER_DAY * 2;
     uint constant SECONDS_PER_DAY = 86400;
 
-    constructor() {
+    constructor() public {
         dev = msg.sender;
         admin[dev] = true;
     }
