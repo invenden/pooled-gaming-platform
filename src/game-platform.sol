@@ -29,8 +29,11 @@ contract PooledGamePlatform {
     struct Game {
         address gameAddress;
         address tokenAddress;
-        uint gameEndsOn;
+        uint toPool;
+        uint endsOn;
+        bool running;
         mapping(address=>Player) players;
+        uint numPlayers;
         address[] _players;
     }
 
@@ -46,14 +49,24 @@ contract PooledGamePlatform {
     }
 
     //// PLAYER FUNCTIONS ////
-    function deposit(address tokenAddress, uint amount, address referredBy) onlyDuringGame(tokenAddress) public returns (uint) { // TODO: msg.value and trc tokens...
+    function deposit(address tokenAddress, uint amount, address referredBy) onlyDuringGame(tokenAddress) public returns (uint) {
         require(amount > 0, "Cannot purchase 0 tokens.");
         Game storage game = games[tokenAddress];
         Player storage player = game.players[msg.sender];
         if (player.referredBy == address(0)) { // new player
-            player.referredBy = referredBy != address(0) ? referredBy : dev;
+            player.referredBy = referredBy != address(0) && referredBy != msg.sender ? referredBy : dev;
         }
 
+        if (player.shares == 0) {
+            // recycle array instead of actually deleting to conserve energy
+            if (game._players.length == game.numPlayers) {
+                game._players.length += 1;
+            }
+            game._players[game.numPlayers++] = msg.sender;
+        }
+
+        TRC20 trc20 = TRC20(game.tokenAddress);
+        require(trc20.transferFrom(msg.sender, address(this), amount));
         uint netAmount = extractFees(game, amount, true);
         player.shares = player.shares.add(netAmount);
         return player.shares;
@@ -62,9 +75,9 @@ contract PooledGamePlatform {
     function withdraw(address tokenAddress) onlyDuringGame(tokenAddress) onlyActivePlayers(tokenAddress) public returns (uint) {
         Game storage game = games[tokenAddress];
         Player storage player = game.players[msg.sender];
-        uint shares = player.shares;
-        uint toWithdraw = extractFees(game, shares, false);
+        uint shares = extractFees(game, player.shares, false);
         TRC20 trc20 = TRC20(tokenAddress);
+        uint toWithdraw = shares > trc20.balanceOf(address(this)) ? trc20.balanceOf(address(this)) : shares;
         trc20.transfer(msg.sender, toWithdraw);
         player.shares = 0;
         return toWithdraw;
@@ -76,8 +89,8 @@ contract PooledGamePlatform {
 
     function _claim(address tokenAddress, address receiver) internal returns (uint) {
         Player storage player = games[tokenAddress].players[receiver];
-        uint shares = player.shares;
         TRC20 trc20 = TRC20(tokenAddress);
+        uint shares = player.shares > trc20.balanceOf(address(this)) ? trc20.balanceOf(address(this)) : player.shares;
         trc20.transfer(receiver, shares);
         player.shares = 0;
         return shares;
@@ -97,29 +110,34 @@ contract PooledGamePlatform {
         gameContract.deposit(amount); // TODO: make sure this call works
     }
 
+    function activeGames() public view {
+        // TODO: figure out how to expose this info
+    }
+
     //// ADMIN FUNCTIONS ////
     function startGame(address tokenAddress, uint daysToRun) onlyAdmins() onlyBetweenGames(tokenAddress) public {
         Game storage game = games[tokenAddress];
-        require(block.timestamp >= game.gameEndsOn + WAITING_PERIOD, "A new game cannot begin until players have had enough time to collect their earnings from the last game.");
+        require(block.timestamp >= game.endsOn + WAITING_PERIOD, "A new game cannot begin until players have had enough time to collect their earnings from the last game.");
         require(daysToRun > 0, "Cannot run a game for 0 days.");
-        game.gameEndsOn = block.timestamp.add(daysToRun.mul(SECONDS_PER_DAY));
-        
-        GameContract gameContract = GameContract(game.gameAddress);
+        game.endsOn = block.timestamp.add(daysToRun.mul(SECONDS_PER_DAY));
+        game.running = true;
+        game.toPool = 0;
         TRC20 trc20 = TRC20(game.tokenAddress);
         uint seed = trc20.balanceOf(address(this));
 
-        if (seed >= gameContract.minimumDeposit()) {
-            gameContract.deposit(seed);
-        }
+        payPool(game, seed);
 
-        for (uint i=0; i<game._players.length; i++) {
+        for (uint i=0; i<game.numPlayers; i++) {
             game.players[game._players[i]].shares = 0;
         }
+        game.numPlayers = 1;
+        game._players[0] = dev;
     }
 
     function endGame(address tokenAddress) onlyAdmins() onlyDuringGame(tokenAddress) public {
         Game storage game = games[tokenAddress];
-        game.gameEndsOn = block.timestamp; // TODO: onlyDuringGame() will fail here... really truly absolutely must use gameStarted bool
+        game.endsOn = block.timestamp;
+        game.running = false;
 
         // Dev is always a player, but never a winner.
         _claim(tokenAddress, dev);
@@ -127,13 +145,7 @@ contract PooledGamePlatform {
         GameContract gameContract = GameContract(game.gameAddress);
         uint claimedRewards = gameContract.claim();
 
-        TRC20 trc20 = TRC20(game.tokenAddress);
-        uint balance = trc20.balanceOf(address(this));
-        for (uint i=0; i< game._players.length; i++) {
-            Player storage player = game.players[game._players[i]];
-            uint newShares = player.shares.div(balance).mul(claimedRewards);
-            player.shares = player.shares.add(newShares);
-        }
+        payDividends(game, dev, claimedRewards);
     }
 
     function registerAdmin(address addr, bool isAdmin) onlyAdmins() public {
@@ -146,10 +158,16 @@ contract PooledGamePlatform {
         address tokenAddress = gameContract.tokenAddress();
         Game storage game = games[tokenAddress];
         
-        require(game.gameEndsOn < block.timestamp, "A game is currently running.");
+        require(!game.running, "A game is currently running.");
         game.gameAddress = gameAddress;
         game.tokenAddress = tokenAddress;
-        // leave players alone, so they can still claim any possible rewards if we're changing gameAddresses on a token.
+    }
+
+    function collectDivs(address tokenAddress) onlyDuringGame(tokenAddress) public {
+        Game storage game = games[tokenAddress];
+        GameContract gameContract = GameContract(game.gameAddress);
+        uint divs = gameContract.withdraw();
+        payDividends(game, address(0), divs);
     }
 
     //// INTERNAL ////
@@ -165,9 +183,8 @@ contract PooledGamePlatform {
             toReferral = 0;
         }
 
-        payDividends(game, msg.sender, toDivs);
         payPool(game, toPool);
-
+        payDividends(game, msg.sender, toDivs);
 
         uint netAmount = amount.sub(toPool).sub(toDivs).sub(toReferral);
 
@@ -175,13 +192,25 @@ contract PooledGamePlatform {
     }
 
     function payDividends(Game storage game, address exclude, uint dividends) internal {
-        // TODO
+        TRC20 trc20 = TRC20(game.tokenAddress);
+        uint balance = trc20.balanceOf(address(this)).sub(dividends).sub(game.players[exclude].shares);
+
+        for (uint i=0; i< game.numPlayers; i++) {
+            if(game._players[i] == exclude) continue;
+
+            Player storage player = game.players[game._players[i]];
+            uint newShares = player.shares.div(balance).mul(dividends);
+            player.shares = player.shares.add(newShares);
+        }
     }
 
     function payPool(Game storage game, uint amount) internal {
-        // TODO
-        // hold amount in ledger. if ledger > threshold for poolContract, send. (50 for opals staking)
-        addToGame(game.tokenAddress, amount);
+        game.toPool = game.toPool.add(amount);
+        GameContract gameContract = GameContract(game.gameAddress);
+        if (game.toPool >= gameContract.minimumDeposit()) {
+            gameContract.deposit(game.toPool);
+            game.toPool = 0;
+        }
     }
 
     function payReferral(Game storage game, address referrer, uint amount) internal {
@@ -208,12 +237,14 @@ contract PooledGamePlatform {
     }
 
     modifier onlyDuringGame(address tokenAddress) {
-        require(games[tokenAddress].gameEndsOn > block.timestamp, "A game is not running.");
+        require(games[tokenAddress].gameAddress != address(0), "There are no games for this token.");
+        require(games[tokenAddress].running, "A game is not running.");
         _;
     }
 
     modifier onlyBetweenGames(address tokenAddress) {
-        require(games[tokenAddress].gameEndsOn <= block.timestamp, "A game is currently running.");
+        require(games[tokenAddress].gameAddress != address(0), "There are no games for this token.");
+        require(!games[tokenAddress].running, "A game is currently running.");
         _;
     }
 }
