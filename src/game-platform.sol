@@ -107,11 +107,12 @@ contract PooledGamePlatform {
     function addToGame(address tokenAddress, uint amount) onlyDuringGame(tokenAddress) public {
         GameContract gameContract = GameContract(games[tokenAddress].gameAddress);
         require(amount > gameContract.minimumDeposit(), "Insufficient tokens to add.");
-        gameContract.deposit(amount); // TODO: make sure this call works
+        gameContract.deposit(amount);
     }
 
-    function activeGames() public view {
-        // TODO: figure out how to expose this info
+    function getRegisteredGame(address tokenAddress) public view returns (address gameAddress, uint endsOn, uint numPlayers) {
+        Game storage game = games[tokenAddress];
+        return (game.gameAddress, game.endsOn, game.numPlayers);
     }
 
     //// ADMIN FUNCTIONS ////
