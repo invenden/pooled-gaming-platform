@@ -1,22 +1,8 @@
-// SPDX-License-Identifier: GPL-3.0
-pragma solidity 0.5.12;
+pragma solidity ^0.5.10;
 
-interface TRC20 {
-    function totalSupply() external view returns (uint);
-    function balanceOf(address tokenOwner) external view returns (uint256 balance);
-    function allowance(address owner, address spender) external  view returns (uint256 remaining);
-    function transfer(address recipient, uint256 amount) external returns (bool success);
-    function approve(address spender, uint256 amount) external  returns (bool success);
-    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool success);
-}
-
-interface GameContract {
-    function minimumDeposit() external view returns (uint256 minimum);
-    function tokenAddress() external view returns (address);
-    function deposit(uint256 amount) external returns (bool success);
-    function withdraw() external returns (uint256 amount);
-    function claim() external returns (uint256 amount);
-}
+import './PGPGame.sol';
+import './TRC20.sol';
+import './SafeMath.sol';
 
 contract PooledGamePlatform {
     using SafeMath for uint256;
@@ -105,9 +91,7 @@ contract PooledGamePlatform {
     }
 
     function addToGame(address tokenAddress, uint amount) onlyDuringGame(tokenAddress) public {
-        GameContract gameContract = GameContract(games[tokenAddress].gameAddress);
-        require(amount > gameContract.minimumDeposit(), "Insufficient tokens to add.");
-        gameContract.deposit(amount);
+        payPool(games[tokenAddress], amount);
     }
 
     function getRegisteredGame(address tokenAddress) public view returns (address gameAddress, uint endsOn, uint numPlayers) {
@@ -143,7 +127,7 @@ contract PooledGamePlatform {
         // Dev is always a player, but never a winner.
         _claim(tokenAddress, dev);
 
-        GameContract gameContract = GameContract(game.gameAddress);
+        PGPGame gameContract = PGPGame(game.gameAddress);
         uint claimedRewards = gameContract.claim();
 
         payDividends(game, dev, claimedRewards);
@@ -155,7 +139,7 @@ contract PooledGamePlatform {
     }
 
     function registerGame(address gameAddress) onlyAdmins() public {
-        GameContract gameContract = GameContract(gameAddress);
+        PGPGame gameContract = PGPGame(gameAddress);
         address tokenAddress = gameContract.tokenAddress();
         Game storage game = games[tokenAddress];
         
@@ -166,7 +150,7 @@ contract PooledGamePlatform {
 
     function collectDivs(address tokenAddress) onlyDuringGame(tokenAddress) public {
         Game storage game = games[tokenAddress];
-        GameContract gameContract = GameContract(game.gameAddress);
+        PGPGame gameContract = PGPGame(game.gameAddress);
         uint divs = gameContract.withdraw();
         payDividends(game, address(0), divs);
     }
@@ -206,12 +190,8 @@ contract PooledGamePlatform {
     }
 
     function payPool(Game storage game, uint amount) internal {
-        game.toPool = game.toPool.add(amount);
-        GameContract gameContract = GameContract(game.gameAddress);
-        if (game.toPool >= gameContract.minimumDeposit()) {
-            gameContract.deposit(game.toPool);
-            game.toPool = 0;
-        }
+        PGPGame gameContract = PGPGame(game.gameAddress);
+        gameContract.deposit(amount);
     }
 
     function payReferral(Game storage game, address referrer, uint amount) internal {
@@ -247,36 +227,5 @@ contract PooledGamePlatform {
         require(games[tokenAddress].gameAddress != address(0), "There are no games for this token.");
         require(!games[tokenAddress].running, "A game is currently running.");
         _;
-    }
-}
-
-library SafeMath {
-    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
-        if (a == 0) {
-            return 0;
-        }
-        uint256 c = a * b;
-        assert(c / a == b);
-        return c;
-    }
-
-    function div(uint256 a, uint256 b) internal pure returns (uint256) {
-        uint256 c = a / b;
-        return c;
-    }
-
-    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
-        assert(b <= a);
-        return a - b;
-    }
-
-    function add(uint256 a, uint256 b) internal pure returns (uint256) {
-        uint256 c = a + b;
-        assert(c >= a);
-        return c;
-    }
-
-    function percentage(uint256 a, uint256 percent) internal pure returns (uint256) {
-        return div(mul(a, percent), 100);
     }
 }
