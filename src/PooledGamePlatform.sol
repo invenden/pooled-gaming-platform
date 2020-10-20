@@ -26,8 +26,7 @@ contract PooledGamePlatform {
     address internal dev;
     mapping(address=>bool) admin;
     mapping(address=>Game) games;
-    uint constant WAITING_PERIOD = SECONDS_PER_DAY * 2;
-    uint constant SECONDS_PER_DAY = 86400;
+    uint constant WAITING_PERIOD = 2 days;
 
     constructor() public {
         dev = msg.sender;
