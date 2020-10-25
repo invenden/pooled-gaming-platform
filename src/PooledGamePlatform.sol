@@ -1,7 +1,7 @@
 pragma solidity ^0.5.10;
 
 import './PGPGame.sol';
-import './TRC20.sol';
+import './ITRC20.sol';
 import './SafeMath.sol';
 
 contract PooledGamePlatform {
@@ -27,7 +27,6 @@ contract PooledGamePlatform {
     mapping(address=>bool) admin;
     mapping(address=>Game) games;
     uint constant WAITING_PERIOD = 2 days;
-    uint constant SECONDS_PER_DAY = 86400;
 
     constructor() public {
         dev = msg.sender;
@@ -51,7 +50,7 @@ contract PooledGamePlatform {
             game._players[game.numPlayers++] = msg.sender;
         }
 
-        TRC20 trc20 = TRC20(game.tokenAddress);
+        ITRC20 trc20 = ITRC20(game.tokenAddress);
         require(trc20.transferFrom(msg.sender, address(this), amount));
         uint netAmount = extractFees(game, amount, true);
         player.shares = player.shares.add(netAmount);
@@ -62,7 +61,7 @@ contract PooledGamePlatform {
         Game storage game = games[tokenAddress];
         Player storage player = game.players[msg.sender];
         uint shares = extractFees(game, player.shares, false);
-        TRC20 trc20 = TRC20(tokenAddress);
+        ITRC20 trc20 = ITRC20(tokenAddress);
         uint toWithdraw = shares > trc20.balanceOf(address(this)) ? trc20.balanceOf(address(this)) : shares;
         trc20.transfer(msg.sender, toWithdraw);
         player.shares = 0;
@@ -75,7 +74,7 @@ contract PooledGamePlatform {
 
     function _claim(address tokenAddress, address receiver) internal returns (uint) {
         Player storage player = games[tokenAddress].players[receiver];
-        TRC20 trc20 = TRC20(tokenAddress);
+        ITRC20 trc20 = ITRC20(tokenAddress);
         uint shares = player.shares > trc20.balanceOf(address(this)) ? trc20.balanceOf(address(this)) : player.shares;
         trc20.transfer(receiver, shares);
         player.shares = 0;
@@ -104,10 +103,10 @@ contract PooledGamePlatform {
         Game storage game = games[tokenAddress];
         require(block.timestamp >= game.endsOn + WAITING_PERIOD, "A new game cannot begin until players have had enough time to collect their earnings from the last game.");
         require(daysToRun > 0, "Cannot run a game for 0 days.");
-        game.endsOn = block.timestamp.add(daysToRun.mul(SECONDS_PER_DAY));
+        game.endsOn = block.timestamp.add(daysToRun.mul(1 days));
         game.running = true;
         game.toPool = 0;
-        TRC20 trc20 = TRC20(game.tokenAddress);
+        ITRC20 trc20 = ITRC20(game.tokenAddress);
         uint seed = trc20.balanceOf(address(this));
 
         payPool(game, seed);
@@ -177,7 +176,7 @@ contract PooledGamePlatform {
     }
 
     function payDividends(Game storage game, address exclude, uint dividends) internal {
-        TRC20 trc20 = TRC20(game.tokenAddress);
+        ITRC20 trc20 = ITRC20(game.tokenAddress);
         uint balance = trc20.balanceOf(address(this)).sub(dividends).sub(game.players[exclude].shares);
 
         for (uint i=0; i< game.numPlayers; i++) {
