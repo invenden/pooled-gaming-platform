@@ -1,11 +1,14 @@
 pragma solidity ^0.5.10;
 
-import './PGPGame.sol';
+import './Address.sol';
 import './ITRC20.sol';
+import './PGPGame.sol';
+import './ProposalPlatform.sol';
 import './SafeMath.sol';
 
-contract PooledGamePlatform {
+contract PooledGamePlatform is ProposalPlatform {
     using SafeMath for uint256;
+    using Address for address;
 
     struct Player {
         uint shares;
@@ -13,9 +16,9 @@ contract PooledGamePlatform {
     }
 
     struct Game {
+        uint proposalId;
         address gameAddress;
         address tokenAddress;
-        uint toPool;
         uint endsOn;
         bool running;
         mapping(address=>Player) players;
@@ -23,23 +26,21 @@ contract PooledGamePlatform {
         address[] _players;
     }
 
-    address internal dev;
-    mapping(address=>bool) admin;
-    mapping(address=>Game) games;
+    ITRC20 internal pgp;
+    mapping(address=>Game) public games; // mapped by the game's tokenAddress
     uint constant WAITING_PERIOD = 2 days;
 
-    constructor() public {
-        dev = msg.sender;
-        admin[dev] = true;
+    constructor(address pgpToken) public {
+        pgp = ITRC20(pgpToken);
     }
 
     //// PLAYER FUNCTIONS ////
-    function deposit(address tokenAddress, uint amount, address referredBy) onlyDuringGame(tokenAddress) public returns (uint) {
+    function deposit(address tokenAddress, uint amount, address referredBy) noContracts onlyDuringGame(tokenAddress) public returns (uint) {
         require(amount > 0, "Cannot purchase 0 tokens.");
         Game storage game = games[tokenAddress];
         Player storage player = game.players[msg.sender];
         if (player.referredBy == address(0)) { // new player
-            player.referredBy = referredBy != address(0) && referredBy != msg.sender ? referredBy : dev;
+            player.referredBy = referredBy != address(0) && referredBy != msg.sender ? referredBy : owner;
         }
 
         if (player.shares == 0) {
@@ -99,13 +100,12 @@ contract PooledGamePlatform {
     }
 
     //// ADMIN FUNCTIONS ////
-    function startGame(address tokenAddress, uint daysToRun) onlyAdmins() onlyBetweenGames(tokenAddress) public {
+    function startGame(address tokenAddress, uint daysToRun) onlyAdmins onlyBetweenGames(tokenAddress) public {
         Game storage game = games[tokenAddress];
         require(block.timestamp >= game.endsOn + WAITING_PERIOD, "A new game cannot begin until players have had enough time to collect their earnings from the last game.");
         require(daysToRun > 0, "Cannot run a game for 0 days.");
         game.endsOn = block.timestamp.add(daysToRun.mul(1 days));
         game.running = true;
-        game.toPool = 0;
         ITRC20 trc20 = ITRC20(game.tokenAddress);
         uint seed = trc20.balanceOf(address(this));
 
@@ -115,29 +115,24 @@ contract PooledGamePlatform {
             game.players[game._players[i]].shares = 0;
         }
         game.numPlayers = 1;
-        game._players[0] = dev;
+        game._players[0] = owner;
     }
 
-    function endGame(address tokenAddress) onlyAdmins() onlyDuringGame(tokenAddress) public {
+    function endGame(address tokenAddress) onlyAdmins onlyDuringGame(tokenAddress) public {
         Game storage game = games[tokenAddress];
         game.endsOn = block.timestamp;
         game.running = false;
 
-        // Dev is always a player, but never a winner.
-        _claim(tokenAddress, dev);
+        // Owner is always a player, but never a winner.
+        _claim(tokenAddress, owner);
 
         PGPGame gameContract = PGPGame(game.gameAddress);
         uint claimedRewards = gameContract.claim();
 
-        payDividends(game, dev, claimedRewards);
+        payDividends(game, owner, claimedRewards);
     }
 
-    function registerAdmin(address addr, bool isAdmin) onlyAdmins() public {
-        require(addr != dev, "The dev will always be an Administrator.");
-        admin[addr] = isAdmin;
-    }
-
-    function registerGame(address gameAddress) onlyAdmins() public {
+    function registerGame(address gameAddress) onlyAdmins public {
         PGPGame gameContract = PGPGame(gameAddress);
         address tokenAddress = gameContract.tokenAddress();
         Game storage game = games[tokenAddress];
@@ -197,7 +192,7 @@ contract PooledGamePlatform {
         if (game.players[referrer].shares > 0) {
             payPlayer(game, referrer, amount);
         } else {
-            payPlayer(game, dev, amount);
+            payPlayer(game, owner, amount);
         }
     }
 
@@ -211,11 +206,6 @@ contract PooledGamePlatform {
         _;
     }
 
-    modifier onlyAdmins() {
-        require(admin[msg.sender], "Only an Administrator can perform this action.");
-        _;
-    }
-
     modifier onlyDuringGame(address tokenAddress) {
         require(games[tokenAddress].gameAddress != address(0), "There are no games for this token.");
         require(games[tokenAddress].running, "A game is not running.");
@@ -225,6 +215,11 @@ contract PooledGamePlatform {
     modifier onlyBetweenGames(address tokenAddress) {
         require(games[tokenAddress].gameAddress != address(0), "There are no games for this token.");
         require(!games[tokenAddress].running, "A game is currently running.");
+        _;
+    }
+    
+    modifier noContracts() {
+        require(!Address.isContract(msg.sender), "Contracts cannot play.");
         _;
     }
 }
