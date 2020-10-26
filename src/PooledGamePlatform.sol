@@ -26,21 +26,19 @@ contract PooledGamePlatform is ProposalPlatform {
         address[] _players;
     }
 
-    ITRC20 internal pgp;
     mapping(address=>Game) public games; // mapped by the game's tokenAddress
     uint constant WAITING_PERIOD = 2 days;
 
-    constructor(address pgpToken) public {
-        pgp = ITRC20(pgpToken);
+    constructor(address pgpToken) ProposalPlatform(pgpToken) public {
     }
 
     //// PLAYER FUNCTIONS ////
     function deposit(address tokenAddress, uint amount, address referredBy) noContracts onlyDuringGame(tokenAddress) public returns (uint) {
         require(amount > 0, "Cannot purchase 0 tokens.");
         Game storage game = games[tokenAddress];
-        Player storage player = game.players[msg.sender];
+        Player storage player = game.players[_msgSender()];
         if (player.referredBy == address(0)) { // new player
-            player.referredBy = referredBy != address(0) && referredBy != msg.sender ? referredBy : owner;
+            player.referredBy = referredBy != address(0) && referredBy != _msgSender() ? referredBy : owner;
         }
 
         if (player.shares == 0) {
@@ -48,11 +46,11 @@ contract PooledGamePlatform is ProposalPlatform {
             if (game._players.length == game.numPlayers) {
                 game._players.length += 1;
             }
-            game._players[game.numPlayers++] = msg.sender;
+            game._players[game.numPlayers++] = _msgSender();
         }
 
         ITRC20 trc20 = ITRC20(game.tokenAddress);
-        require(trc20.transferFrom(msg.sender, address(this), amount));
+        require(trc20.transferFrom(_msgSender(), address(this), amount));
         uint netAmount = extractFees(game, amount, true);
         player.shares = player.shares.add(netAmount);
         return player.shares;
@@ -60,17 +58,17 @@ contract PooledGamePlatform is ProposalPlatform {
 
     function withdraw(address tokenAddress) onlyDuringGame(tokenAddress) onlyActivePlayers(tokenAddress) public returns (uint) {
         Game storage game = games[tokenAddress];
-        Player storage player = game.players[msg.sender];
+        Player storage player = game.players[_msgSender()];
         uint shares = extractFees(game, player.shares, false);
         ITRC20 trc20 = ITRC20(tokenAddress);
         uint toWithdraw = shares > trc20.balanceOf(address(this)) ? trc20.balanceOf(address(this)) : shares;
-        trc20.transfer(msg.sender, toWithdraw);
+        trc20.transfer(_msgSender(), toWithdraw);
         player.shares = 0;
         return toWithdraw;
     }
 
     function claim(address tokenAddress) onlyBetweenGames(tokenAddress) onlyActivePlayers(tokenAddress) public returns (uint) {
-        return _claim(tokenAddress, msg.sender);
+        return _claim(tokenAddress, _msgSender());
     }
 
     function _claim(address tokenAddress, address receiver) internal returns (uint) {
@@ -83,11 +81,11 @@ contract PooledGamePlatform is ProposalPlatform {
     }
 
     function claimableShares(address tokenAddress) public view returns (uint) {
-        return games[tokenAddress].players[msg.sender].shares;
+        return games[tokenAddress].players[_msgSender()].shares;
     }
 
     function sellableShares(address tokenAddress) public view returns (uint) {
-        return games[tokenAddress].players[msg.sender].shares.percentage(90); // total 10% fee will be applied if player sells.
+        return games[tokenAddress].players[_msgSender()].shares.percentage(90); // total 10% fee will be applied if player sells.
     }
 
     function addToGame(address tokenAddress, uint amount) onlyDuringGame(tokenAddress) public {
@@ -156,14 +154,14 @@ contract PooledGamePlatform is ProposalPlatform {
         uint toReferral = amount.percentage(2);
 
         if (shouldPayReferrer) {
-            payReferral(game, game.players[msg.sender].referredBy, toReferral);
+            payReferral(game, game.players[_msgSender()].referredBy, toReferral);
         } else {
             toPool = toPool.add(toReferral);
             toReferral = 0;
         }
 
         payPool(game, toPool);
-        payDividends(game, msg.sender, toDivs);
+        payDividends(game, _msgSender(), toDivs);
 
         uint netAmount = amount.sub(toPool).sub(toDivs).sub(toReferral);
 
@@ -202,7 +200,7 @@ contract PooledGamePlatform is ProposalPlatform {
 
     //// MODIFIERS ////
     modifier onlyActivePlayers(address tokenAddress) {
-        require(games[tokenAddress].players[msg.sender].shares > 0, "You are not eligible.");
+        require(games[tokenAddress].players[_msgSender()].shares > 0, "You are not eligible.");
         _;
     }
 
@@ -219,7 +217,7 @@ contract PooledGamePlatform is ProposalPlatform {
     }
     
     modifier noContracts() {
-        require(!Address.isContract(msg.sender), "Contracts cannot play.");
+        require(!Address.isContract(_msgSender()), "Contracts cannot play.");
         _;
     }
 }
