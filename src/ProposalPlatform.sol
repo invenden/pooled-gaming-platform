@@ -12,6 +12,7 @@ contract ProposalPlatform is Auditable {
 
     /** @dev a single voter can only cast 100 PGP at a proposal. */
     uint constant public MAX_VOTES_PER_PROPOSAL = 100 * 10 ** 18; // 100 PGP
+    uint constant public COST_TO_PROPOSE_GAME = 1000 * 10 ** 18; // 1000 PGP
 
     // AUTONOMOUS MODE
     /** @dev if the threshold is met, a proposal can be enacted without admin approval. */
@@ -33,6 +34,7 @@ contract ProposalPlatform is Auditable {
 
     struct Proposal {
         uint pId;
+        address submitter;
         uint proposedOn;
         uint thresholdMetOn;
         PGPGame game;
@@ -58,15 +60,20 @@ contract ProposalPlatform is Auditable {
 
     ///// VOTERS /////
     function proposeGame(address gameAddress, uint daysToRun) public {
-        // TODO: Costs ... 1000 PGP to propose a game? goes to seed for players?
+        require(pgp.balanceOf(_msgSender()) >= COST_TO_PROPOSE_GAME, "ProposalPlatform: You do not have enough PGP to propose this game.");
+        require(pgp.allowance(_msgSender(), address(this)) >= COST_TO_PROPOSE_GAME, "ProposalPlatofmr: You most approve the platform for proposing.");
         PGPGame game = PGPGame(gameAddress);
 
         uint pId = numProposals++;
         Proposal storage proposal = proposals[pId];
+        proposal.pId = pId;
+        proposal.submitter = _msgSender();
         proposal.game = game;
         proposal.gameAddress = gameAddress;
         proposal.daysToRun = daysToRun;
         proposal.proposedOn = block.timestamp;
+
+        pgp.transferFrom(_msgSender(), address(this), COST_TO_PROPOSE_GAME);
     }
 
     function voteForProposal(uint pId, uint votingStake) activeProposals(pId) voters(votingStake) public {
